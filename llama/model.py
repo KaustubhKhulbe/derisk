@@ -4,6 +4,7 @@
 import math
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from torch.nn.attention.flex_attention import _mask_mod_signature, and_masks, flex_attention, create_block_mask
 
 import fairscale.nn.model_parallel.initialize as fs_init
 import torch
@@ -14,7 +15,25 @@ from fairscale.nn.model_parallel.layers import (
     VocabParallelEmbedding,
 )
 from torch import nn
+from torch.nn.attention.flex_attention import create_block_mask
+from functools import lru_cache
 
+flex_attention = torch.compile(flex_attention, dynamic=False)
+
+@lru_cache
+def create_block_mask_from_score_mod(score_mod, B, H, M, N, device='cuda'):
+    block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
+    return block_mask
+
+def sliding_window_causal(score, b, h, q_idx, kv_idx):
+    SLIDING_WINDOW = 1024
+    return torch.where((q_idx >= kv_idx) & (q_idx - kv_idx <= SLIDING_WINDOW), score, -float("inf"))
+
+def noop(score, b, h, q_idx, kv_idx):
+    return score
+
+def causal(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
 
 @dataclass
 class ModelArgs:
@@ -181,11 +200,13 @@ class Attention(nn.Module):
         values = values.transpose(
             1, 2
         )  # (bs, n_local_heads, cache_len + seqlen, head_dim)
-        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
-        if mask is not None:
-            scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
+
+        '''
+        Do I need a block mask?
+        '''
+
+        output = flex_attention(xq, keys, values, score_mod=sliding_window_causal)
+
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
 
@@ -199,11 +220,13 @@ class FeedForward(nn.Module):
         ffn_dim_multiplier: Optional[float],
     ):
         super().__init__()
-        hidden_dim = int(2 * hidden_dim / 3)
+        # hidden_dim = int(2 * hidden_dim / 3)
         # custom dim factor multiplier
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+        # if ffn_dim_multiplier is not None:
+        #     hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+        # hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+
+        hidden_dim = 14336
 
         self.w1 = ColumnParallelLinear(
             dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x
@@ -276,6 +299,7 @@ class Transformer(nn.Module):
 
     @torch.inference_mode()
     def forward(self, tokens: torch.Tensor, start_pos: int):
+        print("Forward Pass Instantiated...")
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
