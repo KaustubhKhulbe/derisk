@@ -25,9 +25,11 @@ def create_block_mask_from_score_mod(score_mod, B, H, M, N, device='cuda'):
     block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
     return block_mask
 
-def sliding_window_causal(score, b, h, q_idx, kv_idx):
-    SLIDING_WINDOW = 1024
-    return torch.where((q_idx >= kv_idx) & (q_idx - kv_idx <= SLIDING_WINDOW), score, -float("inf"))
+def sliding_window_causal(b, h, q_idx, kv_idx):
+    SLIDING_WINDOW = 4096
+    causal_mask = q_idx >= kv_idx
+    window_mask = q_idx - kv_idx <= SLIDING_WINDOW 
+    return causal_mask & window_mask
 
 def noop(score, b, h, q_idx, kv_idx):
     return score
@@ -169,6 +171,7 @@ class Attention(nn.Module):
         freqs_cis: torch.Tensor,
         mask: Optional[torch.Tensor],
     ):
+        # print("Attention mechanism called")
         bsz, seqlen, _ = x.shape
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
@@ -201,11 +204,12 @@ class Attention(nn.Module):
             1, 2
         )  # (bs, n_local_heads, cache_len + seqlen, head_dim)
 
-        '''
-        Do I need a block mask?
-        '''
+        Q_LEN = xq.size(2)
+        KV_LEN = keys.size(2)
 
-        output = flex_attention(xq, keys, values, score_mod=sliding_window_causal)
+        block_mask = create_block_mask(sliding_window_causal, 1, 1, Q_LEN, KV_LEN)
+
+        output = flex_attention(xq, keys, values, block_mask=block_mask)
 
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
