@@ -27,7 +27,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-MAX_SEQ_LEN = 2**6
+import time
+
+MAX_SEQ_LEN = int(1.5 * 2**15)
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -60,11 +62,12 @@ def fsdp_main(rank, world_size, args):
     transformer = Transformer(args).to(rank)
     fsdp_transformer = FSDP(transformer)
 
-    input_tensor = torch.randn(1, MAX_SEQ_LEN).to(rank)
+    tensor = torch.rand(1, MAX_SEQ_LEN, device=rank).long()
 
-    fsdp_transformer(input_tensor, 0)
-
-    print("FSDP-ing")
+    t = time.time()
+    fsdp_transformer(tensor, 0)
+    if rank == 0:
+        print(time.time() - t)
     cleanup()
 
 if __name__ == '__main__':
