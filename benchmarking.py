@@ -19,7 +19,7 @@ MAX_SEQ_LEN = 8192
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 args = ModelArgs(dim=4096, n_layers=32, n_heads=32, n_kv_heads=8, vocab_size=128000, ffn_dim_multiplier=1.0, max_batch_size=1, max_seq_len=MAX_SEQ_LEN)
-initialize_model_parallel(model_parallel_size_=1)  # Set the size of the tensor model parallel group
+initialize_model_parallel(model_parallel_size_=1)
 
 transformer = Transformer(args).to(device)
 
@@ -28,16 +28,22 @@ tensor = torch.rand(1, MAX_SEQ_LEN, device="cuda").long()
 for _ in range(5):
     transformer.forward(tensor, 0)
 
-torch.cuda.synchronize()  # Ensure GPU operations are complete
+torch.cuda.synchronize()
 
-# Profile
-with profile(activities=[ProfilerActivity.CUDA], profile_memory=True, with_flops=True) as prof:
-    transformer.forward(tensor, 0)
+with profile(activities=[ProfilerActivity.CUDA], 
+             
+        schedule=torch.profiler.schedule(wait=0, warmup=0, active=6, repeat=1),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
 
-torch.cuda.synchronize()  # Ensure GPU operations are complete
+       ) as prof:
+    with record_function("## forward ##"):
+        transformer.forward(tensor, 0)
 
-# Log profiler output
-print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+torch.cuda.synchronize()
+
+print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
 
 log_file.close()
 dist.destroy_process_group()

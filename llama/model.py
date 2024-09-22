@@ -26,9 +26,9 @@ def create_block_mask_from_score_mod(score_mod, B, H, M, N, device='cuda'):
     return block_mask
 
 def sliding_window_causal(b, h, q_idx, kv_idx):
-    SLIDING_WINDOW = 4096
+    SLIDING_WINDOW = 2**15/2
     causal_mask = q_idx >= kv_idx
-    window_mask = q_idx - kv_idx <= SLIDING_WINDOW 
+    window_mask = q_idx - kv_idx <= SLIDING_WINDOW
     return causal_mask & window_mask
 
 def noop(score, b, h, q_idx, kv_idx):
