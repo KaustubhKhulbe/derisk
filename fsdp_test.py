@@ -22,6 +22,8 @@ from torch.distributed.fsdp.wrap import (
 
 from llama import Transformer, ModelArgs
 
+import torch.profiler
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,7 +31,7 @@ import torch.optim as optim
 
 import time
 
-MAX_SEQ_LEN = int(1.5 * 2**15)
+MAX_SEQ_LEN = 2**4
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -64,8 +66,17 @@ def fsdp_main(rank, world_size, args):
 
     tensor = torch.rand(1, MAX_SEQ_LEN, device=rank).long()
 
-    t = time.time()
-    fsdp_transformer(tensor, 0)
+    with torch.profiler.profile(
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/fsdp_log'),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
+    ) as prof:
+        t = time.time()
+        fsdp_transformer(tensor, 0)
+
+
     if rank == 0:
         print(time.time() - t)
     cleanup()
