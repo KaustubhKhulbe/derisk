@@ -31,6 +31,7 @@ import torch.optim as optim
 
 import time
 
+
 MAX_SEQ_LEN = 2**4
 
 def setup(rank, world_size):
@@ -62,23 +63,28 @@ def fsdp_main(rank, world_size, args):
     torch.cuda.set_device(rank)
 
     transformer = Transformer(args).to(rank)
-    fsdp_transformer = FSDP(transformer)
+    # fsdp_transformer = FSDP(transformer)
 
     tensor = torch.rand(1, MAX_SEQ_LEN, device=rank).long()
 
-    with torch.profiler.profile(
+    prof = torch.profiler.profile(
         schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/fsdp_log'),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/resnet18'),
         record_shapes=True,
-        profile_memory=True,
-        with_stack=True
-    ) as prof:
-        t = time.time()
-        fsdp_transformer(tensor, 0)
+        with_stack=True)
+
+    prof.start()
+    print("Hello World")
+    prof.step()
+    prof.stop()
+
+    t = time.time()
+    # fsdp_transformer(tensor, 0)
+    # fsdp_transformer.forward(tensor, 0)
 
 
-    if rank == 0:
-        print(time.time() - t)
+#    if rank == 0:
+#        print(time.time() - t)
     cleanup()
 
 if __name__ == '__main__':
